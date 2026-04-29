@@ -11,11 +11,11 @@ struct AppConfiguration {
         fileManager: FileManager = .default,
         processInfo: ProcessInfo = .processInfo
     ) -> AppConfiguration {
-        let envPath = URL(fileURLWithPath: fileManager.currentDirectoryPath)
-            .appendingPathComponent(".env")
-            .path
-        let environment = loadEnvironmentIfPresent(at: envPath, fileManager: fileManager)
-        let databaseURL = processInfo.environment["DATABASE_URL"] ?? fallbackDatabaseURL
+        let environment = loadEnvironmentIfPresent(
+            at: envSearchPaths(fileManager: fileManager),
+            fileManager: fileManager
+        )
+        let databaseURL = environmentValue("DATABASE_URL", processInfo: processInfo) ?? fallbackDatabaseURL
 
         return AppConfiguration(
             database: DatabaseConfiguration(databaseURL: databaseURL),
@@ -24,11 +24,11 @@ struct AppConfiguration {
     }
 
     private static func loadEnvironmentIfPresent(
-        at path: String,
+        at paths: [String],
         fileManager: FileManager
     ) -> EnvironmentStatus {
-        guard fileManager.fileExists(atPath: path) else {
-            return .missing(path: path)
+        guard let path = paths.first(where: { fileManager.fileExists(atPath: $0) }) else {
+            return .missing(paths: paths)
         }
 
         do {
@@ -38,11 +38,48 @@ struct AppConfiguration {
             return .failed(path: path, message: error.localizedDescription)
         }
     }
+
+    private static func envSearchPaths(fileManager: FileManager) -> [String] {
+        var paths: [String] = [
+            URL(fileURLWithPath: fileManager.currentDirectoryPath)
+                .appendingPathComponent(".env")
+                .path
+        ]
+
+        if let resourceURL = Bundle.main.resourceURL {
+            paths.append(resourceURL.appendingPathComponent(".env").path)
+        }
+
+        if let executableURL = Bundle.main.executableURL {
+            paths.append(
+                executableURL
+                    .deletingLastPathComponent()
+                    .appendingPathComponent(".env")
+                    .path
+            )
+        }
+
+        var seenPaths = Set<String>()
+        return paths.filter { seenPaths.insert($0).inserted }
+    }
+
+    private static func environmentValue(_ key: String, processInfo: ProcessInfo) -> String? {
+        if let value = processInfo.environment[key], !value.isEmpty {
+            return value
+        }
+
+        guard let cValue = getenv(key) else {
+            return nil
+        }
+
+        let value = String(cString: cValue)
+        return value.isEmpty ? nil : value
+    }
 }
 
 enum EnvironmentStatus {
     case loaded(path: String)
-    case missing(path: String)
+    case missing(paths: [String])
     case failed(path: String, message: String)
 
     var displayText: String {
