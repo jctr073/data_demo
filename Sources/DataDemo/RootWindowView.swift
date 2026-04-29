@@ -20,7 +20,11 @@ struct RootWindowView: View {
                 )
                     .frame(minWidth: 220, idealWidth: 260, maxWidth: 360)
 
-                MainContextPanelView(selection: selectedNode, configuration: configuration)
+                MainContextPanelView(
+                    selection: selectedNode,
+                    configuration: configuration,
+                    onFilmSaved: updateFilmNode
+                )
                     .frame(minWidth: 560)
             }
         }
@@ -47,6 +51,18 @@ struct RootWindowView: View {
         }
 
         isLoadingNodes = false
+    }
+
+    @MainActor
+    private func updateFilmNode(_ filmDetails: FilmDetails) {
+        let updatedTitle = filmDetails.title.displayCapitalized
+        nodes = nodes.map {
+            $0.updatingNode(source: "film", id: filmDetails.filmID, title: updatedTitle)
+        }
+
+        if selectedNode?.source == "film", selectedNode?.id == filmDetails.filmID {
+            selectedNode = selectedNode?.withTitle(updatedTitle)
+        }
     }
 }
 
@@ -129,11 +145,42 @@ private extension DataNode {
 
         return children?.contains { $0.contains(target) } ?? false
     }
+
+    func withTitle(_ title: String) -> DataNode {
+        DataNode(
+            id: id,
+            title: title,
+            source: source,
+            systemImage: systemImage,
+            children: children
+        )
+    }
+
+    func updatingNode(source targetSource: String, id targetID: Int, title: String) -> DataNode {
+        if source == targetSource && id == targetID {
+            return withTitle(title)
+        }
+
+        guard let children else {
+            return self
+        }
+
+        return DataNode(
+            id: id,
+            title: self.title,
+            source: source,
+            systemImage: systemImage,
+            children: children.map {
+                $0.updatingNode(source: targetSource, id: targetID, title: title)
+            }
+        )
+    }
 }
 
 private struct MainContextPanelView: View {
     let selection: DataNode?
     let configuration: AppConfiguration
+    let onFilmSaved: (FilmDetails) -> Void
     @State private var filmDetails: FilmDetails?
     @State private var languageOptions: [LanguageOption] = []
     @State private var isLoadingFilmDetails = false
@@ -220,6 +267,7 @@ private struct MainContextPanelView: View {
             .saveFilmDetails(draft)
         if selection?.source == "film", selection?.id == draft.filmID {
             filmDetails = savedDetails
+            onFilmSaved(savedDetails)
         }
         return savedDetails
     }
@@ -618,6 +666,10 @@ private extension FilmDetails {
 }
 
 private extension String {
+    var displayCapitalized: String {
+        lowercased().capitalized
+    }
+
     var displayValue: String {
         isEmpty ? "NULL" : self
     }
