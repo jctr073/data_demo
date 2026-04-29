@@ -641,7 +641,7 @@ private extension FilmDetails {
             FilmDetailRow(label: "length", value: length.displayValue),
             FilmDetailRow(label: "replacement_cost", value: replacementCost),
             FilmDetailRow(label: "rating", value: rating),
-            FilmDetailRow(label: "last_update", value: lastUpdate),
+            FilmDetailRow(label: "last_update", value: lastUpdate.displayDateTimeValue),
             FilmDetailRow(label: "special_features", value: specialFeatures.displayValue),
             FilmDetailRow(label: "fulltext", value: fulltext)
         ]
@@ -671,8 +671,36 @@ private extension String {
     }
 
     var displayValue: String {
-        isEmpty ? "NULL" : self
+        isEmpty ? "" : self
     }
+
+    var displayDateTimeValue: String {
+        guard !isEmpty else {
+            return ""
+        }
+
+        if let date = Self.postgresTimestampWithFractionalSeconds.date(from: self)
+            ?? Self.postgresTimestamp.date(from: self)
+        {
+            return date.formatted(date: .abbreviated, time: .shortened)
+        }
+
+        return self
+    }
+
+    private static let postgresTimestampWithFractionalSeconds: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss.SSSSSSZ"
+        return formatter
+    }()
+
+    private static let postgresTimestamp: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ssZ"
+        return formatter
+    }()
 }
 
 private struct DetailRow: View {
