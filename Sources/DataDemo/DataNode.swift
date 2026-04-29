@@ -42,3 +42,51 @@ struct DataNode: Identifiable, Hashable, Sendable {
         )
     ]
 }
+
+extension DataNode {
+    var displayID: String {
+        "\(source):\(id)"
+    }
+
+    func contains(_ target: DataNode?) -> Bool {
+        guard let target else {
+            return false
+        }
+
+        if self == target {
+            return true
+        }
+
+        return children?.contains { $0.contains(target) } ?? false
+    }
+
+    func withTitle(_ title: String) -> DataNode {
+        DataNode(
+            id: id,
+            title: title,
+            source: source,
+            systemImage: systemImage,
+            children: children
+        )
+    }
+
+    func updatingNode(source targetSource: String, id targetID: Int, title: String) -> DataNode {
+        if source == targetSource && id == targetID {
+            return withTitle(title)
+        }
+
+        guard let children else {
+            return self
+        }
+
+        return DataNode(
+            id: id,
+            title: self.title,
+            source: source,
+            systemImage: systemImage,
+            children: children.map {
+                $0.updatingNode(source: targetSource, id: targetID, title: title)
+            }
+        )
+    }
+}
