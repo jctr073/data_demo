@@ -7,7 +7,7 @@ struct FilmDetailsView: View {
     let onEdit: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 22) {
             if isLoading {
                 Label("Loading film details", systemImage: "hourglass")
                     .foregroundStyle(.secondary)
@@ -15,16 +15,112 @@ struct FilmDetailsView: View {
                 Label(errorMessage, systemImage: "exclamationmark.triangle")
                     .foregroundStyle(.red)
             } else if let filmDetails {
-                Button(action: onEdit) {
-                    Label("Edit", systemImage: "pencil")
-                }
-                .buttonStyle(.borderedProminent)
+                VStack(alignment: .leading, spacing: 24) {
+                    HStack(alignment: .top, spacing: 18) {
+                        Text(filmDetails.description.displayValue.isEmpty ? "No description available." : filmDetails.description.displayValue)
+                            .font(.title3.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .lineSpacing(4)
+                            .fixedSize(horizontal: false, vertical: true)
 
-                ForEach(filmDetails.displayRows) { row in
-                    DetailRow(label: row.label, value: row.value)
+                        Spacer(minLength: 16)
+
+                        Button(action: onEdit) {
+                            Image(systemName: "pencil")
+                                .font(.system(size: 15, weight: .semibold))
+                                .frame(width: 32, height: 32)
+                                .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
+                        .background {
+                            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                .fill(Color.primary.opacity(0.06))
+                        }
+                        .help("Edit film")
+                    }
+
+                    VStack(alignment: .leading, spacing: 14) {
+                        FilmFactRow("Year") {
+                            Text(filmDetails.releaseYear.displayValue)
+                        }
+
+                        FilmFactRow("Language") {
+                            Text(filmDetails.displayLanguageSummary)
+                        }
+
+                        FilmFactRow("Rating") {
+                            FilmRatingBadge(rating: filmDetails.rating.displayValue)
+                        }
+
+                        FilmFactRow("Length") {
+                            Text(filmDetails.length.displayMinutesValue)
+                        }
+
+                        FilmFactRow("Rental") {
+                            Text(filmDetails.displayRentalSummary)
+                        }
+                    }
+
+                    Divider()
+
+                    VStack(alignment: .leading, spacing: 12) {
+                        FilmFactRow("Replacement") {
+                            Text(filmDetails.replacementCost.displayCurrencyValue)
+                        }
+
+                        FilmFactRow("Features") {
+                            Text(filmDetails.specialFeatures.displayValue.isEmpty ? "None" : filmDetails.specialFeatures.displayValue)
+                        }
+
+                        FilmFactRow("Last updated") {
+                            Text(filmDetails.lastUpdate.displayDateTimeValue)
+                        }
+                    }
                 }
             }
         }
+    }
+}
+
+private struct FilmFactRow<Value: View>: View {
+    let label: String
+    let value: () -> Value
+
+    init(_ label: String, @ViewBuilder value: @escaping () -> Value) {
+        self.label = label
+        self.value = value
+    }
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 22) {
+            Text(label)
+                .font(.title3.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 158, alignment: .leading)
+
+            value()
+                .font(.title3.weight(.semibold))
+                .foregroundStyle(.primary)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
+private struct FilmRatingBadge: View {
+    let rating: String
+
+    var body: some View {
+        Text(rating.isEmpty ? "Unrated" : rating)
+            .font(.callout.weight(.bold))
+            .foregroundStyle(.primary)
+            .padding(.horizontal, 10)
+            .frame(height: 28)
+            .background {
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(Color.primary.opacity(0.08))
+            }
     }
 }
 
@@ -256,6 +352,32 @@ private struct FilmDetailRow: Identifiable {
 }
 
 private extension FilmDetails {
+    var displayLanguageSummary: String {
+        let languageValue = language.displayValue
+        let originalLanguageValue = originalLanguage.displayValue
+
+        guard !originalLanguageValue.isEmpty else {
+            return languageValue
+        }
+
+        return "\(languageValue) (originally \(originalLanguageValue))"
+    }
+
+    var displayRentalSummary: String {
+        let rateValue = rentalRate.displayCurrencyValue
+        let durationValue = rentalDuration.displayDaysValue
+
+        if rateValue.isEmpty {
+            return durationValue
+        }
+
+        if durationValue.isEmpty {
+            return rateValue
+        }
+
+        return "\(rateValue) · \(durationValue)"
+    }
+
     var displayRows: [FilmDetailRow] {
         [
             FilmDetailRow(label: "film_id", value: String(filmID)),

@@ -48,6 +48,10 @@ extension DataNode {
         "\(source):\(id)"
     }
 
+    var filmChildren: [DataNode] {
+        children?.filter { $0.source == "film" } ?? []
+    }
+
     func contains(_ target: DataNode?) -> Bool {
         guard let target else {
             return false
@@ -88,5 +92,35 @@ extension DataNode {
                 $0.updatingNode(source: targetSource, id: targetID, title: title)
             }
         )
+    }
+
+    func path(to target: DataNode?) -> [DataNode] {
+        guard let target else {
+            return []
+        }
+
+        if self == target {
+            return [self]
+        }
+
+        for child in children ?? [] {
+            let childPath = child.path(to: target)
+            if !childPath.isEmpty {
+                return [self] + childPath
+            }
+        }
+
+        return []
+    }
+
+    static func path(to target: DataNode?, in nodes: [DataNode]) -> [DataNode] {
+        for node in nodes {
+            let nodePath = node.path(to: target)
+            if !nodePath.isEmpty {
+                return nodePath
+            }
+        }
+
+        return []
     }
 }

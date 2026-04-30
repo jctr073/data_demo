@@ -11,7 +11,35 @@ extension String {
     }
 
     var displayValue: String {
-        isEmpty ? "" : self
+        let trimmedValue = trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmedValue.isEmpty ? "" : trimmedValue
+    }
+
+    var displayCurrencyValue: String {
+        let trimmedValue = displayValue
+        guard !trimmedValue.isEmpty else {
+            return ""
+        }
+
+        return trimmedValue.hasPrefix("$") ? trimmedValue : "$\(trimmedValue)"
+    }
+
+    var displayMinutesValue: String {
+        let trimmedValue = displayValue
+        guard !trimmedValue.isEmpty else {
+            return ""
+        }
+
+        return "\(trimmedValue) min"
+    }
+
+    var displayDaysValue: String {
+        let trimmedValue = displayValue
+        guard !trimmedValue.isEmpty else {
+            return ""
+        }
+
+        return trimmedValue == "1" ? "1 day" : "\(trimmedValue) days"
     }
 
     var displayDateTimeValue: String {

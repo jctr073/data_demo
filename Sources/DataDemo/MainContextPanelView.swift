@@ -2,6 +2,7 @@ import SwiftUI
 
 struct MainContextPanelView: View {
     let selection: DataNode?
+    let breadcrumb: [DataNode]
     let configuration: AppConfiguration
     let onNodeUpdated: (DataNodeDisplayUpdate) -> Void
 
@@ -9,10 +10,12 @@ struct MainContextPanelView: View {
 
     init(
         selection: DataNode?,
+        breadcrumb: [DataNode],
         configuration: AppConfiguration,
         onNodeUpdated: @escaping (DataNodeDisplayUpdate) -> Void
     ) {
         self.selection = selection
+        self.breadcrumb = breadcrumb
         self.configuration = configuration
         self.onNodeUpdated = onNodeUpdated
         _model = StateObject(
@@ -22,15 +25,8 @@ struct MainContextPanelView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("mainContextPanel")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-
-                    Text(selection?.title ?? "No selection")
-                        .font(.system(size: 34, weight: .semibold))
-                }
+            VStack(alignment: .leading, spacing: 24) {
+                DetailHeaderView(selection: selection, breadcrumb: breadcrumb)
 
                 MainContextContentView(
                     selection: selection,
@@ -42,7 +38,9 @@ struct MainContextPanelView: View {
                     onSaveFilmDetails: saveFilmDetails
                 )
             }
-            .padding(28)
+            .padding(.horizontal, 56)
+            .padding(.vertical, 44)
+            .frame(maxWidth: 900, alignment: .topLeading)
             .frame(maxWidth: .infinity, alignment: .topLeading)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -60,6 +58,59 @@ struct MainContextPanelView: View {
         }
 
         return savedDetails
+    }
+}
+
+private struct DetailHeaderView: View {
+    let selection: DataNode?
+    let breadcrumb: [DataNode]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            BreadcrumbView(nodes: breadcrumb)
+
+            Text(selection?.title ?? "Select a film")
+                .font(.system(size: 34, weight: .semibold))
+                .foregroundStyle(.primary)
+                .textSelection(.enabled)
+        }
+    }
+}
+
+private struct BreadcrumbView: View {
+    let nodes: [DataNode]
+
+    var body: some View {
+        if nodes.isEmpty {
+            Text("Films")
+                .font(.callout.weight(.semibold))
+                .foregroundStyle(.secondary)
+        } else {
+            HStack(spacing: 6) {
+                ForEach(Array(nodes.enumerated()), id: \.element.displayID) { index, node in
+                    if index > 0 {
+                        Text("›")
+                            .foregroundStyle(.tertiary)
+                    }
+
+                    Text(label(for: node))
+                        .lineLimit(1)
+                }
+            }
+            .font(.callout.weight(.semibold))
+            .foregroundStyle(.secondary)
+        }
+    }
+
+    private func label(for node: DataNode) -> String {
+        switch node.source {
+        case "film":
+            "Film #\(node.id)"
+        case "actor":
+            "Actor #\(node.id)"
+        default:
+            node.title
+        }
     }
 }
 
