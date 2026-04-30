@@ -4,30 +4,30 @@ struct RootWindowView: View {
     let configuration: AppConfiguration
     @Binding var selectedNode: DataNode?
     @State private var nodes: [DataNode] = []
+    @State private var searchText = ""
     @State private var isLoadingNodes = false
     @State private var loadingError: String?
 
     var body: some View {
-        VStack(spacing: 0) {
-            ToolPanelView(configuration: configuration)
+        HSplitView {
+            SearchFirstSidebarView(
+                nodes: nodes,
+                isLoading: isLoadingNodes,
+                errorMessage: loadingError,
+                searchText: $searchText,
+                selection: $selectedNode
+            )
+            .frame(minWidth: 280, idealWidth: 320, maxWidth: 440)
 
-            HSplitView {
-                NavTreePanelView(
-                    nodes: nodes,
-                    isLoading: isLoadingNodes,
-                    errorMessage: loadingError,
-                    selection: $selectedNode
-                )
-                    .frame(minWidth: 220, idealWidth: 260, maxWidth: 360)
-
-                MainContextPanelView(
-                    selection: selectedNode,
-                    configuration: configuration,
-                    onFilmSaved: updateFilmNode
-                )
-                    .frame(minWidth: 560)
-            }
+            MainContextPanelView(
+                selection: selectedNode,
+                breadcrumb: DataNode.path(to: selectedNode, in: nodes),
+                configuration: configuration,
+                onNodeUpdated: updateNode
+            )
+            .frame(minWidth: 600)
         }
+        .background(Color(nsColor: .windowBackgroundColor))
         .task {
             await loadNodes()
         }
@@ -42,7 +42,7 @@ struct RootWindowView: View {
             let loadedNodes = try await DataNodeRepository(configuration: configuration.database).loadNodes()
             nodes = loadedNodes
             if selectedNode == nil || !loadedNodes.contains(where: { $0.contains(selectedNode) }) {
-                selectedNode = loadedNodes.first
+                selectedNode = Self.firstFilm(in: loadedNodes) ?? loadedNodes.first
             }
         } catch {
             nodes = []
@@ -54,670 +54,377 @@ struct RootWindowView: View {
     }
 
     @MainActor
-    private func updateFilmNode(_ filmDetails: FilmDetails) {
-        let updatedTitle = filmDetails.title.displayCapitalized
+    private func updateNode(_ update: DataNodeDisplayUpdate) {
         nodes = nodes.map {
-            $0.updatingNode(source: "film", id: filmDetails.filmID, title: updatedTitle)
+            $0.updatingNode(source: update.source, id: update.id, title: update.title)
         }
 
-        if selectedNode?.source == "film", selectedNode?.id == filmDetails.filmID {
-            selectedNode = selectedNode?.withTitle(updatedTitle)
+        if selectedNode?.source == update.source, selectedNode?.id == update.id {
+            selectedNode = selectedNode?.withTitle(update.title)
         }
+    }
+
+    private static func firstFilm(in nodes: [DataNode]) -> DataNode? {
+        for node in nodes {
+            if node.source == "film" {
+                return node
+            }
+
+            if let film = firstFilm(in: node.children ?? []) {
+                return film
+            }
+        }
+
+        return nil
     }
 }
 
-private struct ToolPanelView: View {
-    let configuration: AppConfiguration
-
-    var body: some View {
-        HStack(spacing: 12) {
-            Label("Data Demo", systemImage: "tablecells")
-                .font(.headline)
-
-            Divider()
-                .frame(height: 22)
-
-            Label("Postgres configured", systemImage: "externaldrive.connected.to.line.below")
-                .foregroundStyle(.secondary)
-
-            Spacer()
-
-            Text(configuration.environment.displayText)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-        .padding(.horizontal, 16)
-        .frame(height: 56)
-        .background(.bar)
-        .overlay(alignment: .bottom) {
-            Divider()
-        }
-    }
-}
-
-private struct NavTreePanelView: View {
+private struct SearchFirstSidebarView: View {
     let nodes: [DataNode]
     let isLoading: Bool
     let errorMessage: String?
+    @Binding var searchText: String
     @Binding var selection: DataNode?
+    @State private var expandedCategoryID: String?
+    @FocusState private var isSearchFocused: Bool
+
+    private var trimmedSearchText: String {
+        searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var isSearching: Bool {
+        !trimmedSearchText.isEmpty
+    }
+
+    private var activeCategory: DataNode? {
+        DataNode.path(to: selection, in: nodes).first(where: { $0.source == "category" }) ?? nodes.first
+    }
+
+    private var selectedFilm: DataNode? {
+        DataNode.path(to: selection, in: nodes).first(where: { $0.source == "film" })
+    }
+
+    private var searchGroups: [SidebarSearchGroup] {
+        guard isSearching else {
+            return []
+        }
+
+        return nodes.compactMap { category in
+            let matchingFilms = category.filmChildren.filter { film in
+                film.title.localizedCaseInsensitiveContains(trimmedSearchText)
+                    || category.title.localizedCaseInsensitiveContains(trimmedSearchText)
+            }
+
+            guard !matchingFilms.isEmpty else {
+                return nil
+            }
+
+            return SidebarSearchGroup(category: category, films: matchingFilms)
+        }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("navTreePanel")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
+            searchField
+                .padding(.horizontal, 20)
+                .padding(.top, 26)
+                .padding(.bottom, 20)
 
-            List(selection: $selection) {
-                if isLoading {
-                    Label("Loading data", systemImage: "hourglass")
-                        .foregroundStyle(.secondary)
-                } else if let errorMessage {
-                    Label(errorMessage, systemImage: "exclamationmark.triangle")
-                        .foregroundStyle(.red)
-                } else if nodes.isEmpty {
-                    Label("No data", systemImage: "tray")
-                        .foregroundStyle(.secondary)
-                } else {
-                    OutlineGroup(nodes, children: \.children) { node in
-                        Label(node.title, systemImage: node.systemImage)
-                            .tag(node)
-                    }
-                }
-            }
-            .listStyle(.sidebar)
-            .scrollContentBackground(.hidden)
+            sidebarContent
         }
         .background(Color(nsColor: .controlBackgroundColor))
-    }
-}
-
-private extension DataNode {
-    func contains(_ target: DataNode?) -> Bool {
-        guard let target else {
-            return false
-        }
-
-        if self == target {
-            return true
-        }
-
-        return children?.contains { $0.contains(target) } ?? false
-    }
-
-    func withTitle(_ title: String) -> DataNode {
-        DataNode(
-            id: id,
-            title: title,
-            source: source,
-            systemImage: systemImage,
-            children: children
-        )
-    }
-
-    func updatingNode(source targetSource: String, id targetID: Int, title: String) -> DataNode {
-        if source == targetSource && id == targetID {
-            return withTitle(title)
-        }
-
-        guard let children else {
-            return self
-        }
-
-        return DataNode(
-            id: id,
-            title: self.title,
-            source: source,
-            systemImage: systemImage,
-            children: children.map {
-                $0.updatingNode(source: targetSource, id: targetID, title: title)
-            }
-        )
-    }
-}
-
-private struct MainContextPanelView: View {
-    let selection: DataNode?
-    let configuration: AppConfiguration
-    let onFilmSaved: (FilmDetails) -> Void
-    @State private var filmDetails: FilmDetails?
-    @State private var languageOptions: [LanguageOption] = []
-    @State private var isLoadingFilmDetails = false
-    @State private var filmDetailsError: String?
-
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("mainContextPanel")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-
-                    Text(selection?.title ?? "No selection")
-                        .font(.system(size: 34, weight: .semibold))
-                }
-
-                MainContextContentView(
-                    selection: selection,
-                    configuration: configuration,
-                    filmDetails: filmDetails,
-                    languageOptions: languageOptions,
-                    isLoadingFilmDetails: isLoadingFilmDetails,
-                    filmDetailsError: filmDetailsError,
-                    onSaveFilmDetails: saveFilmDetails
-                )
-            }
-            .padding(28)
-            .frame(maxWidth: .infinity, alignment: .topLeading)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(Color(nsColor: .textBackgroundColor))
-        .task(id: selection?.displayID) {
-            await loadSelectedNodeDetails()
-        }
-    }
-
-    @MainActor
-    private func loadSelectedNodeDetails() async {
-        let requestedSelection = selection
-        let requestedSelectionID = requestedSelection?.displayID
-
-        filmDetails = nil
-        languageOptions = []
-        filmDetailsError = nil
-        isLoadingFilmDetails = false
-
-        guard let requestedSelection else {
-            return
-        }
-
-        switch requestedSelection.source {
-        case "film":
-            isLoadingFilmDetails = true
-            defer {
-                if selection?.displayID == requestedSelectionID {
-                    isLoadingFilmDetails = false
-                }
+        .onChange(of: activeCategory?.displayID, initial: true) { _, newCategoryID in
+            guard expandedCategoryID == nil else {
+                return
             }
 
-            do {
-                let repository = DataNodeRepository(configuration: configuration.database)
-                async let details = repository.loadFilmDetails(filmID: requestedSelection.id)
-                async let languages = repository.loadLanguageOptions()
-                let loadedDetails = try await details
-                let loadedLanguages = try await languages
-                if !Task.isCancelled && selection?.displayID == requestedSelectionID {
-                    filmDetails = loadedDetails
-                    languageOptions = loadedLanguages
-                }
-            } catch {
-                if !Task.isCancelled && selection?.displayID == requestedSelectionID {
-                    filmDetailsError = error.localizedDescription
-                }
-            }
-        default:
-            break
+            expandedCategoryID = newCategoryID
         }
-    }
-
-    @MainActor
-    private func saveFilmDetails(_ draft: FilmDetailsDraft) async throws -> FilmDetails {
-        let savedDetails = try await DataNodeRepository(configuration: configuration.database)
-            .saveFilmDetails(draft)
-        if selection?.source == "film", selection?.id == draft.filmID {
-            filmDetails = savedDetails
-            onFilmSaved(savedDetails)
-        }
-        return savedDetails
-    }
-}
-
-private extension DataNode {
-    var displayID: String {
-        "\(source):\(id)"
-    }
-}
-
-private struct MainContextContentView: View {
-    let selection: DataNode?
-    let configuration: AppConfiguration
-    let filmDetails: FilmDetails?
-    let languageOptions: [LanguageOption]
-    let isLoadingFilmDetails: Bool
-    let filmDetailsError: String?
-    let onSaveFilmDetails: (FilmDetailsDraft) async throws -> FilmDetails
-    @State private var isEditingFilm = false
-    @State private var isSavingFilm = false
-    @State private var saveFilmError: String?
-
-    var body: some View {
-        if selection?.source == "film" {
-            Group {
-                if isEditingFilm, let filmDetails {
-                    FilmEditFormView(
-                        filmDetails: filmDetails,
-                        languageOptions: languageOptions,
-                        isSaving: isSavingFilm,
-                        errorMessage: saveFilmError,
-                        onSave: saveFilm,
-                        onCancel: cancelEditing
-                    )
-                } else {
-                    FilmDetailsView(
-                        filmDetails: filmDetails,
-                        isLoading: isLoadingFilmDetails,
-                        errorMessage: filmDetailsError,
-                        onEdit: startEditing
-                    )
-                }
-            }
-            .onChange(of: selection?.displayID) {
-                cancelEditing()
-            }
-            .onChange(of: filmDetails?.filmID) {
-                if !isSavingFilm {
-                    cancelEditing()
-                }
-            }
-        } else {
-            SelectionSummaryView(selection: selection, configuration: configuration)
-        }
-    }
-
-    private func startEditing() {
-        guard filmDetails != nil else {
-            return
-        }
-
-        saveFilmError = nil
-        isEditingFilm = true
-    }
-
-    private func cancelEditing() {
-        saveFilmError = nil
-        isSavingFilm = false
-        isEditingFilm = false
-    }
-
-    private func saveFilm(_ draft: FilmDetailsDraft) {
-        isSavingFilm = true
-        saveFilmError = nil
-
-        Task {
-            do {
-                _ = try await onSaveFilmDetails(draft)
-                if !Task.isCancelled {
-                    cancelEditing()
-                }
-            } catch {
-                if !Task.isCancelled {
-                    saveFilmError = error.localizedDescription
-                    isSavingFilm = false
-                }
+        .onChange(of: isSearching) { _, isSearching in
+            if !isSearching {
+                expandedCategoryID = activeCategory?.displayID
             }
         }
     }
-}
 
-private struct SelectionSummaryView: View {
-    let selection: DataNode?
-    let configuration: AppConfiguration
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            DetailRow(label: "Database", value: configuration.database.database)
-            DetailRow(label: "Host", value: "\(configuration.database.host):\(configuration.database.port)")
-            DetailRow(label: "Adapter", value: "PostgresNIO")
-            DetailRow(label: "Selected node", value: selection?.displayID ?? "none")
-        }
-    }
-}
-
-private struct FilmDetailsView: View {
-    let filmDetails: FilmDetails?
-    let isLoading: Bool
-    let errorMessage: String?
-    let onEdit: () -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            if isLoading {
-                Label("Loading film details", systemImage: "hourglass")
+    private var searchField: some View {
+        ZStack {
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.secondary)
-            } else if let errorMessage {
-                Label(errorMessage, systemImage: "exclamationmark.triangle")
-                    .foregroundStyle(.red)
-            } else if let filmDetails {
-                Button(action: onEdit) {
-                    Label("Edit", systemImage: "pencil")
-                }
-                .buttonStyle(.borderedProminent)
 
-                ForEach(filmDetails.displayRows) { row in
-                    DetailRow(label: row.label, value: row.value)
+                TextField("Search films...", text: $searchText)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 15, weight: .medium))
+                    .focused($isSearchFocused)
+                    .onSubmit(selectFirstSearchResult)
+
+                if !searchText.isEmpty {
+                    Button {
+                        searchText = ""
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 13, weight: .semibold))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.tertiary)
+                    .help("Clear search")
                 }
+
+                Text("⌘K")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 8)
+                    .frame(height: 26)
+                    .background {
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .fill(Color(nsColor: .windowBackgroundColor))
+                    }
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .stroke(Color(nsColor: .separatorColor))
+                    }
             }
+            .padding(.horizontal, 12)
+            .frame(height: 44)
+            .background {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Color(nsColor: .textBackgroundColor))
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(Color(nsColor: .separatorColor))
+            }
+
+            Button {
+                isSearchFocused = true
+            } label: {
+                EmptyView()
+            }
+            .keyboardShortcut("k", modifiers: .command)
+            .buttonStyle(.plain)
+            .frame(width: 0, height: 0)
+            .opacity(0)
+            .accessibilityHidden(true)
         }
     }
-}
 
-private struct FilmEditFormView: View {
-    let languageOptions: [LanguageOption]
-    let isSaving: Bool
-    let errorMessage: String?
-    let onSave: (FilmDetailsDraft) -> Void
-    let onCancel: () -> Void
-    private let filmID: Int
-    @State private var title: String
-    @State private var description: String
-    @State private var releaseYear: String
-    @State private var languageID: Int
-    @State private var originalLanguageID: Int?
-    @State private var rentalDuration: String
-    @State private var rentalRate: String
-    @State private var length: String
-    @State private var replacementCost: String
-    @State private var rating: String
-    @State private var specialFeatures: String
-
-    init(
-        filmDetails: FilmDetails,
-        languageOptions: [LanguageOption],
-        isSaving: Bool,
-        errorMessage: String?,
-        onSave: @escaping (FilmDetailsDraft) -> Void,
-        onCancel: @escaping () -> Void
-    ) {
-        self.languageOptions = languageOptions
-        self.isSaving = isSaving
-        self.errorMessage = errorMessage
-        self.onSave = onSave
-        self.onCancel = onCancel
-        filmID = filmDetails.filmID
-        _title = State(initialValue: filmDetails.title)
-        _description = State(initialValue: filmDetails.description)
-        _releaseYear = State(initialValue: filmDetails.releaseYear)
-        _languageID = State(initialValue: filmDetails.languageID)
-        _originalLanguageID = State(initialValue: filmDetails.originalLanguageID)
-        _rentalDuration = State(initialValue: filmDetails.rentalDuration)
-        _rentalRate = State(initialValue: filmDetails.rentalRate)
-        _length = State(initialValue: filmDetails.length)
-        _replacementCost = State(initialValue: filmDetails.replacementCost)
-        _rating = State(initialValue: filmDetails.rating)
-        _specialFeatures = State(initialValue: filmDetails.specialFeatures)
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            DetailRow(label: "film_id", value: String(filmID))
-
-            FilmTextFieldRow(label: "title", text: $title, width: 420)
-            FilmTextEditorRow(label: "description", text: $description)
-            FilmTextFieldRow(label: "release_year", text: $releaseYear, width: 140)
-            FilmLanguagePickerRow(
-                label: "language",
-                selection: $languageID,
-                languageOptions: languageOptions
-            )
-            FilmOptionalLanguagePickerRow(
-                label: "original_language",
-                selection: $originalLanguageID,
-                languageOptions: languageOptions
-            )
-            FilmTextFieldRow(label: "rental_duration", text: $rentalDuration, width: 140)
-            FilmTextFieldRow(label: "rental_rate", text: $rentalRate, width: 140)
-            FilmTextFieldRow(label: "length", text: $length, width: 140)
-            FilmTextFieldRow(label: "replacement_cost", text: $replacementCost, width: 140)
-            FilmTextFieldRow(label: "rating", text: $rating, width: 140)
-            FilmTextFieldRow(label: "special_features", text: $specialFeatures, width: 420)
-
-            if let errorMessage {
-                Label(errorMessage, systemImage: "exclamationmark.triangle")
-                    .foregroundStyle(.red)
-            }
-
-            HStack(spacing: 10) {
-                Button("Cancel", action: onCancel)
-                    .keyboardShortcut(.cancelAction)
-                    .disabled(isSaving)
-
-                Button(action: { onSave(makeDraft()) }) {
-                    if isSaving {
-                        Label("Saving", systemImage: "hourglass")
+    @ViewBuilder
+    private var sidebarContent: some View {
+        if isLoading {
+            SidebarMessageView(title: "Loading films", systemImage: "hourglass")
+                .padding(.horizontal, 20)
+        } else if let errorMessage {
+            SidebarMessageView(title: errorMessage, systemImage: "exclamationmark.triangle", isError: true)
+                .padding(.horizontal, 20)
+        } else if nodes.isEmpty {
+            SidebarMessageView(title: "No films found", systemImage: "tray")
+                .padding(.horizontal, 20)
+        } else {
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 18) {
+                    if isSearching {
+                        searchResults
                     } else {
-                        Label("Save", systemImage: "checkmark")
+                        categoryBrowser
                     }
                 }
-                .buttonStyle(.borderedProminent)
-                .keyboardShortcut(.defaultAction)
-                .disabled(isSaving || !canSave)
+                .padding(.horizontal, 20)
+                .padding(.bottom, 28)
             }
-            .padding(.top, 4)
+            .scrollContentBackground(.hidden)
         }
     }
 
-    private var canSave: Bool {
-        !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && !rentalDuration.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && !rentalRate.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && !replacementCost.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && !rating.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && languageOptions.contains(where: { $0.id == languageID })
-    }
+    private var categoryBrowser: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            SidebarSectionLabel("Categories")
 
-    private func makeDraft() -> FilmDetailsDraft {
-        FilmDetailsDraft(
-            filmID: filmID,
-            title: title,
-            description: description,
-            releaseYear: releaseYear,
-            languageID: languageID,
-            originalLanguageID: originalLanguageID,
-            rentalDuration: rentalDuration,
-            rentalRate: rentalRate,
-            length: length,
-            replacementCost: replacementCost,
-            rating: rating,
-            specialFeatures: specialFeatures
-        )
-    }
-}
+            VStack(alignment: .leading, spacing: 4) {
+                ForEach(nodes) { category in
+                    VStack(alignment: .leading, spacing: 4) {
+                        SidebarCategoryRow(
+                            title: category.title,
+                            count: category.filmChildren.count,
+                            isActive: category == activeCategory,
+                            action: { selectCategory(category) }
+                        )
 
-private struct FilmTextFieldRow: View {
-    let label: String
-    @Binding var text: String
-    let width: CGFloat
-
-    var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 10) {
-            FilmFieldLabel(label)
-
-            TextField(label, text: $text)
-                .textFieldStyle(.roundedBorder)
-                .frame(width: width)
+                        if category.displayID == expandedCategoryID {
+                            VStack(alignment: .leading, spacing: 2) {
+                                ForEach(category.filmChildren) { film in
+                                    SidebarFilmRow(
+                                        title: film.title,
+                                        isSelected: film == selectedFilm,
+                                        action: { selection = film }
+                                    )
+                                }
+                            }
+                            .padding(.leading, 12)
+                        }
+                    }
+                }
+            }
         }
     }
-}
 
-private struct FilmTextEditorRow: View {
-    let label: String
-    @Binding var text: String
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            FilmFieldLabel(label)
+    @ViewBuilder
+    private var searchResults: some View {
+        if searchGroups.isEmpty {
+            SidebarMessageView(title: "No matching films", systemImage: "magnifyingglass")
                 .padding(.top, 6)
+        } else {
+            VStack(alignment: .leading, spacing: 10) {
+                SidebarSectionLabel("Results")
 
-            TextEditor(text: $text)
-                .font(.callout)
-                .frame(width: 520, height: 96)
-                .overlay {
-                    RoundedRectangle(cornerRadius: 6)
-                        .stroke(Color(nsColor: .separatorColor))
-                }
-        }
-    }
-}
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(searchGroups) { group in
+                        VStack(alignment: .leading, spacing: 4) {
+                            SidebarCategoryRow(
+                                title: group.category.title,
+                                count: group.films.count,
+                                isActive: group.category == activeCategory,
+                                action: { selectSearchCategory(group) }
+                            )
 
-private struct FilmLanguagePickerRow: View {
-    let label: String
-    @Binding var selection: Int
-    let languageOptions: [LanguageOption]
-
-    var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 10) {
-            FilmFieldLabel(label)
-
-            Picker(label, selection: $selection) {
-                ForEach(languageOptions) { option in
-                    Text(option.name).tag(option.id)
-                }
-            }
-            .labelsHidden()
-            .frame(width: 220)
-            .disabled(languageOptions.isEmpty)
-        }
-    }
-}
-
-private struct FilmOptionalLanguagePickerRow: View {
-    let label: String
-    @Binding var selection: Int?
-    let languageOptions: [LanguageOption]
-
-    var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 10) {
-            FilmFieldLabel(label)
-
-            Picker(label, selection: $selection) {
-                Text("NULL").tag(Int?.none)
-                ForEach(languageOptions) { option in
-                    Text(option.name).tag(Int?.some(option.id))
+                            VStack(alignment: .leading, spacing: 2) {
+                                ForEach(group.films) { film in
+                                    SidebarFilmRow(
+                                        title: film.title,
+                                        isSelected: film == selectedFilm,
+                                        action: {
+                                            expandedCategoryID = group.category.displayID
+                                            selection = film
+                                        }
+                                    )
+                                }
+                            }
+                            .padding(.leading, 12)
+                        }
+                    }
                 }
             }
-            .labelsHidden()
-            .frame(width: 220)
-            .disabled(languageOptions.isEmpty)
         }
     }
-}
 
-private struct FilmFieldLabel: View {
-    let label: String
+    private func selectCategory(_ category: DataNode) {
+        if expandedCategoryID == category.displayID {
+            expandedCategoryID = nil
+            return
+        }
 
-    init(_ label: String) {
-        self.label = label
+        expandedCategoryID = category.displayID
+        selection = category.filmChildren.first ?? category
     }
 
-    var body: some View {
-        Text(label)
-            .font(.callout.weight(.medium))
-            .foregroundStyle(.secondary)
-            .frame(width: 180, alignment: .leading)
+    private func selectSearchCategory(_ group: SidebarSearchGroup) {
+        expandedCategoryID = group.category.displayID
+        selection = group.films.first ?? group.category
+    }
+
+    private func selectFirstSearchResult() {
+        guard let firstGroup = searchGroups.first, let firstFilm = firstGroup.films.first else {
+            return
+        }
+
+        expandedCategoryID = firstGroup.category.displayID
+        selection = firstFilm
     }
 }
 
-private struct FilmDetailRow: Identifiable {
-    let label: String
-    let value: String
+private struct SidebarSearchGroup: Identifiable {
+    let category: DataNode
+    let films: [DataNode]
 
     var id: String {
-        label
+        category.displayID
     }
 }
 
-private extension FilmDetails {
-    var displayRows: [FilmDetailRow] {
-        [
-            FilmDetailRow(label: "film_id", value: String(filmID)),
-            FilmDetailRow(label: "title", value: title),
-            FilmDetailRow(label: "description", value: description),
-            FilmDetailRow(label: "release_year", value: releaseYear),
-            FilmDetailRow(label: "language", value: language),
-            FilmDetailRow(label: "original_language", value: originalLanguage.displayValue),
-            FilmDetailRow(label: "rental_duration", value: rentalDuration),
-            FilmDetailRow(label: "rental_rate", value: rentalRate),
-            FilmDetailRow(label: "length", value: length.displayValue),
-            FilmDetailRow(label: "replacement_cost", value: replacementCost),
-            FilmDetailRow(label: "rating", value: rating),
-            FilmDetailRow(label: "last_update", value: lastUpdate.displayDateTimeValue),
-            FilmDetailRow(label: "special_features", value: specialFeatures.displayValue),
-            FilmDetailRow(label: "fulltext", value: fulltext)
-        ]
+private struct SidebarSectionLabel: View {
+    let title: String
+
+    init(_ title: String) {
+        self.title = title
     }
-
-    var editDraft: FilmDetailsDraft {
-        FilmDetailsDraft(
-            filmID: filmID,
-            title: title,
-            description: description,
-            releaseYear: releaseYear,
-            languageID: languageID,
-            originalLanguageID: originalLanguageID,
-            rentalDuration: rentalDuration,
-            rentalRate: rentalRate,
-            length: length,
-            replacementCost: replacementCost,
-            rating: rating,
-            specialFeatures: specialFeatures
-        )
-    }
-}
-
-private extension String {
-    var displayCapitalized: String {
-        lowercased().capitalized
-    }
-
-    var displayValue: String {
-        isEmpty ? "" : self
-    }
-
-    var displayDateTimeValue: String {
-        guard !isEmpty else {
-            return ""
-        }
-
-        if let date = Self.postgresTimestampWithFractionalSeconds.date(from: self)
-            ?? Self.postgresTimestamp.date(from: self)
-        {
-            return date.formatted(date: .abbreviated, time: .shortened)
-        }
-
-        return self
-    }
-
-    private static let postgresTimestampWithFractionalSeconds: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss.SSSSSSZ"
-        return formatter
-    }()
-
-    private static let postgresTimestamp: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "yyyy-MM-dd HH:mm:ssZ"
-        return formatter
-    }()
-}
-
-private struct DetailRow: View {
-    let label: String
-    let value: String
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 10) {
-            Text(label)
-                .font(.callout.weight(.medium))
-                .foregroundStyle(.secondary)
-                .frame(width: 180, alignment: .leading)
+        Text(title.uppercased())
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 16)
+    }
+}
 
-            Text(value)
-                .font(.callout)
-                .textSelection(.enabled)
-                .fixedSize(horizontal: false, vertical: true)
+private struct SidebarCategoryRow: View {
+    let title: String
+    let count: Int
+    let isActive: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 10) {
+                Text(title)
+                    .lineLimit(1)
+
+                Spacer(minLength: 10)
+
+                Text("\(count)")
+                    .fontWeight(.semibold)
+                    .monospacedDigit()
+            }
+            .font(.system(size: 16, weight: .semibold))
+            .foregroundStyle(isActive ? Color.accentColor : Color.primary)
+            .padding(.horizontal, 16)
+            .frame(height: 34)
+            .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .background {
+                if isActive {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(Color.accentColor.opacity(0.18))
+                }
+            }
         }
+        .buttonStyle(.plain)
+    }
+}
+
+private struct SidebarFilmRow: View {
+    let title: String
+    let isSelected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 15, weight: isSelected ? .semibold : .regular))
+                .foregroundStyle(isSelected ? Color.primary : Color.secondary)
+                .lineLimit(1)
+                .padding(.horizontal, 16)
+                .frame(maxWidth: .infinity, minHeight: 34, alignment: .leading)
+                .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                .background {
+                    if isSelected {
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .fill(Color.primary.opacity(0.08))
+                    }
+                }
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+private struct SidebarMessageView: View {
+    let title: String
+    let systemImage: String
+    var isError = false
+
+    var body: some View {
+        Label(title, systemImage: systemImage)
+            .font(.callout)
+            .foregroundStyle(isError ? Color.red : Color.secondary)
+            .fixedSize(horizontal: false, vertical: true)
     }
 }

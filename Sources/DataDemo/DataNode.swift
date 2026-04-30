@@ -42,3 +42,85 @@ struct DataNode: Identifiable, Hashable, Sendable {
         )
     ]
 }
+
+extension DataNode {
+    var displayID: String {
+        "\(source):\(id)"
+    }
+
+    var filmChildren: [DataNode] {
+        children?.filter { $0.source == "film" } ?? []
+    }
+
+    func contains(_ target: DataNode?) -> Bool {
+        guard let target else {
+            return false
+        }
+
+        if self == target {
+            return true
+        }
+
+        return children?.contains { $0.contains(target) } ?? false
+    }
+
+    func withTitle(_ title: String) -> DataNode {
+        DataNode(
+            id: id,
+            title: title,
+            source: source,
+            systemImage: systemImage,
+            children: children
+        )
+    }
+
+    func updatingNode(source targetSource: String, id targetID: Int, title: String) -> DataNode {
+        if source == targetSource && id == targetID {
+            return withTitle(title)
+        }
+
+        guard let children else {
+            return self
+        }
+
+        return DataNode(
+            id: id,
+            title: self.title,
+            source: source,
+            systemImage: systemImage,
+            children: children.map {
+                $0.updatingNode(source: targetSource, id: targetID, title: title)
+            }
+        )
+    }
+
+    func path(to target: DataNode?) -> [DataNode] {
+        guard let target else {
+            return []
+        }
+
+        if self == target {
+            return [self]
+        }
+
+        for child in children ?? [] {
+            let childPath = child.path(to: target)
+            if !childPath.isEmpty {
+                return [self] + childPath
+            }
+        }
+
+        return []
+    }
+
+    static func path(to target: DataNode?, in nodes: [DataNode]) -> [DataNode] {
+        for node in nodes {
+            let nodePath = node.path(to: target)
+            if !nodePath.isEmpty {
+                return nodePath
+            }
+        }
+
+        return []
+    }
+}
